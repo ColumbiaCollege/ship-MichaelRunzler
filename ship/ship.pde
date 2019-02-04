@@ -2,12 +2,13 @@ import java.awt.Point;
 
 // Instance variables
 GObject ship; // index of all active physics objects
-PImage img;
-boolean mouseFollow;
-boolean looseFollow;
-boolean hyperspace;
-color hColor;
-HashMap<Integer, Boolean> keyHeld;
+PImage img; // physics object render image
+boolean mouseFollow; // state flag
+boolean looseFollow; // state flag
+boolean hyperspace; // state flag
+boolean hs_toggle; // state flag
+color hColor; // HS label color state tracker
+HashMap<Integer, Boolean> keyHeld; // index of all currently held-down keycodes
 
 // Constants
 static final int SIZE = 50; // size of the object
@@ -17,7 +18,7 @@ static final float INERTIA_DAMPENING = 0.01f; // negative acceleration while not
 static final float DAMPENING_THRESHOLD = 0.1f; // how close the object has to be to the mouse cursor
                                                // (in fractions of the screen size) to start slowing down
 static final float STOP_THRESHOLD = 0.005f; // how close the object has to be to the cursor to stop completely
-static final float MAX_M_TRACKING_VELOCITY = 2.0f; // maximum velocity while following the mouse
+static final float HYPERSPACE_VELOCITY = 1000.0f; //things
 
 void setup()
 {
@@ -33,6 +34,7 @@ void setup()
   mouseFollow = false;
   looseFollow = true;
   hyperspace = false;
+  hs_toggle = false;
   hColor = color(0, 0, 0);
   
   // Create ship physics object
@@ -47,9 +49,11 @@ void draw()
   // Draw help text
   textSize(12);
   fill(color(255));
-  text(String.format("Current input mode: %s", mouseFollow ? "mouse\nLeft-click: loose follow\nRight-click: tight follow" : 
-      "keyboard\nArrow keys: move\nSpacebar: hyperspace"), 0, 0, width, height);
+  text(String.format("Current input mode: %s", mouseFollow ? "mouse/" + 
+      (looseFollow ? "loose-follow" : "tight-follow") + "\nLeft-click: loose follow\nRight-click: tight follow" : 
+      "keyboard\nArrow keys: move\nSpacebar: Hyperspace Drive™"), 0, 0, width, height);
   
+  // Hyperspace feedback
   textSize(72);
   fill(hColor);
   if(hyperspace) text("HYPERSPACE\nENGAGED!", width / 2, height / 2, width, height);
@@ -73,70 +77,46 @@ void calculateDelta(GObject g)
 
 void calculateDM(GObject g)
 {  
+  // Get distance from the mouse cursor, and the signs of said distances
   float[] relCoords = objectDist(g);
   int[] boosts = getBoostDir(g);
   
+  // Give the object a push towards the mouse cursor
   g.velocityDelta(ACCELERATION * boosts[0], ACCELERATION * boosts[1]);
   
+  // Return if loose follow mode is engaged
   if(looseFollow) return;
   
+  // If loose follow is not engaged, get the decimal distance from the cursor
   float multX = relCoords[0] / width;
   float multY = relCoords[1] / height;
-  boolean stoppedX = false;
-  boolean stoppedY = false;
   
-  if(multX < STOP_THRESHOLD){
-    g.setVelocity(0.0f, g.getVelocity()[1]);
-    stoppedX = true;
-  }
-  
-  if(multY < STOP_THRESHOLD){
-    g.setVelocity(g.getVelocity()[0], 0.0f);
-    stoppedY = true;
-  }
-  if(!stoppedX && !stoppedY && multX < DAMPENING_THRESHOLD && multY < DAMPENING_THRESHOLD)
-  {
-    float vX = g.getVelocity()[0] * (1.0f - multX);
-    if(vX > MAX_M_TRACKING_VELOCITY) vX = MAX_M_TRACKING_VELOCITY;
-    g.velocityDelta(vX * boosts[0], 0.0f);
-    
-    float vY = g.getVelocity()[1] * (1.0f - multY);
-    if(vY > MAX_M_TRACKING_VELOCITY) vY = MAX_M_TRACKING_VELOCITY;
-    g.velocityDelta(0.0f, vY * boosts[1]);
-  }
-  
-  println(String.format("XM %3.2f; YM %3.2f", multX, multY)); 
+  // Stop the ship in one or both axes if it is close to the cursor in that axis
+  if(multX < STOP_THRESHOLD) g.setVelocity(0.0f, g.getVelocity()[1]);
+  if(multY < STOP_THRESHOLD) g.setVelocity(g.getVelocity()[0], 0.0f);
 }
 
 void calculateDK(GObject g)
 {
   boolean noInput = false;
   
+  // Hyperspace commands
   if(keyHeld(' '))
   {
-    float[] relCoords = objectDist(g);
-    int[] boosts = getBoostDir(g);
+    if(hs_toggle) g.setVelocity(HYPERSPACE_VELOCITY, g.getVelocity()[1]);
+    else g.setVelocity(-HYPERSPACE_VELOCITY, g.getVelocity()[1]);
+    hs_toggle = !hs_toggle;
     
-    float multX = relCoords[0] / width;
-    float multY = relCoords[1] / height;
-    
-    float vX = g.getVelocity()[0] * (1.0f - multX);
-    if(vX > MAX_M_TRACKING_VELOCITY) vX = MAX_M_TRACKING_VELOCITY;
-    g.velocityDelta(vX * boosts[0], 0.0f);
-    
-    float vY = g.getVelocity()[1] * (1.0f - multY);
-    if(vY > MAX_M_TRACKING_VELOCITY) vY = MAX_M_TRACKING_VELOCITY;
-    g.velocityDelta(0.0f, vY * boosts[1]);
     hyperspace = true;
-  }else{
-    g.reset();
-    hyperspace = false;
+    return;
   }
   
+  // Set X axis acceleration
   if(keyHeld(LEFT)) g.velocityDelta(-ACCELERATION, 0.0f);
   else if(keyHeld(RIGHT)) g.velocityDelta(ACCELERATION, 0.0f);
   else noInput = true;
   
+  // Set Y axis acceleration. If none of the four buttons is pressed, apply braking force to the object.
   if(keyHeld(UP)) g.velocityDelta(0.0f, -ACCELERATION);
   else if(keyHeld(DOWN)) g.velocityDelta(0.0f, ACCELERATION);
   else if(noInput) applyInertiaDampening(g);
@@ -208,8 +188,15 @@ void keyPressed()
   keyHeld.put(keyCode, true); //<>//
 }
 
-void keyReleased(){
+void keyReleased()
+{
   keyHeld.put(keyCode, false);
+  
+  // Reset object if the hyperspace key is released
+  if(key == ' '){
+    ship.reset();
+    hyperspace = false;
+  }
 }
 
 
@@ -283,6 +270,7 @@ class GObject
    */ 
   public void calculateCollision(float w, float h)
   {
+    // voodoo magic code, do not touch
     if(currentCoords.x + graphic.width >= w) // X+
     { 
       float tmp = velocity[0];
